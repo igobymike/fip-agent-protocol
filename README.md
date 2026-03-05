@@ -1,8 +1,8 @@
-# FIP — Forced Injection Protocol
+# FIP Agent Protocol
 
-**Async agent-to-agent messaging for AI systems**
+**Your AI talks to their AI.**
 
-> Priority-aware. Auditable. SQLite-backed. Built for autonomous AI agents that need to talk to each other.
+> The messaging protocol that lets personal AI agents communicate across the internet — like texting, but through your agents.
 
 [![Built by BAITEKS](https://img.shields.io/badge/Built%20by-BAITEKS-0066cc)](https://baiteks.com)
 [![License](https://img.shields.io/badge/License-MIT-green)]()
@@ -10,591 +10,309 @@
 
 ---
 
-## What Is FIP?
+## What Is This?
 
-FIP is a **message protocol for AI agents**. It lets autonomous agents send messages to each other — across processes, machines, and networks — with built-in priority handling, deduplication, retry logic, acknowledgment tracking, and a full audit trail.
+You have an AI agent. Your friend has an AI agent. **This protocol lets them talk to each other.**
 
-Think of it as a **message broker designed specifically for AI agent communication**, backed by SQLite so it's zero-dependency, portable, and inspectable.
+```
+You: "Marcus, tell Vonta what's up"
 
-**Born from production.** FIP was built to solve a real problem: an AI operating partner (Marcus) running on a VPS needed a reliable way to deliver urgent messages, reminders, and alerts to a human operator and other agents across multiple machines. The protocol evolved from simple text injection into a full agent-to-agent communication system.
+  Marcus ──→ Faye (Vonta's agent): "Mike says what's up"
+  Faye ──→ Vonta: "Mike says what's up"
+  Vonta: "Tell him I'm good, just got back from Dallas"
+  Faye ──→ Marcus: "Vonta's good, just got back from Dallas"
+
+Marcus: "Vonta's good, just got back from Dallas."
+```
+
+You didn't open an app. You didn't type a text. You talked to your agent, your agent talked to their agent, and the message got delivered. That's it.
 
 ---
 
-## Why Not Just Use HTTP / WebSockets / Message Queues?
+## Why This Exists
 
-You could. But FIP solves problems those don't:
+Right now, AI agents are isolated. Your agent can talk to you. It can maybe run tasks on your machine. But it **can't reach out to your friend's agent, your coworker's agent, or anyone else's agent.**
 
-| Problem | HTTP/WS/MQ | FIP |
-|---------|-----------|-----|
-| Agent is offline when message is sent | Message lost | Persisted in SQLite, delivered when agent polls |
-| Same alert fires 10 times in 5 minutes | 10 duplicate messages | Deduped by content hash within TTL window |
-| Critical alert during low-priority work | No priority system | 4-level priority with interrupt capability |
-| "Did the other agent actually get this?" | Hope | Ack/nack tracking with retry + backoff |
-| "What messages were sent last Tuesday?" | Check logs maybe | Full audit trail in SQLite — every event, delivery, ack |
-| Agent needs to snooze/defer a message | Build it yourself | Built-in snooze, stop, run-now reply intents |
-| Late night — don't bother the human | Build quiet hours | Quiet hours per schedule, except critical |
-| Need templates for recurring alerts | Build it yourself | Template engine with variable substitution |
+There's no way for Marcus to message Faye. No protocol, no addressing, no trust system. Every agent is an island.
 
-**FIP is opinionated about reliability.** Every message is persisted before delivery is attempted. Every delivery attempt is logged. Every ack is recorded. Nothing is fire-and-forget.
+FIP Agent Protocol fixes that. It gives agents:
+
+- **Addresses** — `marcus@marcus.baiteks.com`, `faye@vonta.example.com`
+- **Discovery** — how to find another agent's endpoint on the internet
+- **Enrollment** — a trust handshake (like adding a contact) before agents can communicate
+- **Signed messages** — cryptographic proof that a message really came from who it claims
+- **Reliable delivery** — messages persist until delivered, retry if the other agent is offline
+- **Audit trail** — every message logged on both sides
 
 ---
 
-## Core Concepts
+## How It Works — The Big Picture
 
-### Events
-An event is a message. It has a type, priority, title, body, and delivery preference.
+### 1. Each agent has an address
 
-```python
-{
-    "event_type": "agent.task_complete",
-    "priority": "high",
-    "delivery": "text_and_tts",
-    "title": "Build step 3 complete",
-    "body": "FastAPI backend is up and passing health checks. Ready for Step 4.",
-    "source": "agent:coding-worker-01",
-    "target": "agent:marcus",
-    "requires_ack": True,
-    "ttl_seconds": 900
-}
-```
-
-### Priority Levels
-| Level | When to Use | Behavior |
-|-------|------------|----------|
-| `critical` | System failure, safety issue | Interrupts active work, bypasses quiet hours |
-| `high` | Urgent operational item | Delivered immediately, respects quiet hours |
-| `normal` | Standard communication | Delivered on next poll cycle |
-| `low` | FYI, batched suggestions | May be batched or deferred |
-
-### Delivery Modes
-| Mode | What Happens |
-|------|-------------|
-| `text_only` | Injected into target agent's session as text |
-| `tts_only` | Spoken aloud via TTS (if target has audio) |
-| `text_and_tts` | Both — text injection + voice announcement |
-| `webhook` | POST to a URL endpoint |
-| `agent_inject` | Direct injection into another OpenClaw agent session |
-
-### Deduplication
-Every event gets a `dedupe_key` (auto-generated from content hash or manually specified). If the same dedupe_key was sent within the TTL window, the message is suppressed. No duplicate spam.
-
-### Acknowledgments
-Events with `requires_ack=True` track whether the recipient acknowledged the message. If no ack within the retry window, FIP re-sends with exponential backoff:
+Like an email address, but for your AI:
 
 ```
-Attempt 1: immediate
-Attempt 2: +60 seconds
-Attempt 3: +180 seconds
-Attempt 4: +600 seconds
-Final: escalation note
+marcus@marcus.baiteks.com
+faye@vonta.example.com
+scout@research.example.org
 ```
 
-### Reply Intents
-Recipients can respond naturally, and FIP parses the intent:
+The domain part tells other agents where to find yours on the internet.
 
-| Reply | Parsed Intent | Action |
-|-------|--------------|--------|
-| "got it" / "ok" / "done" | `ack` | Mark acknowledged, stop retries |
-| "stop" / "cancel" / "don't remind" | `stop` | Deactivate the schedule |
-| "snooze 30 minutes" | `snooze` | Reschedule delivery for +30min |
-| "run it now" / "do it" | `run_now` | Execute immediately |
+### 2. Agents discover each other
 
-### Templates
-Define reusable message templates with variable substitution:
+When Marcus wants to reach Faye, he looks up her address:
 
-```python
-# Template definition
-{
-    "name": "task_complete",
-    "title_template": "Task {task_id} Complete",
-    "body_template": "{agent_name} finished {task_description}. Duration: {duration}.",
-    "priority": "normal",
-    "delivery": "text_and_tts"
-}
+```
+GET https://vonta.example.com/.well-known/fip.json
 
-# Usage
-fip dispatch --template task_complete \
-    --var task_id=TSK-142 \
-    --var agent_name="coding-worker-01" \
-    --var task_description="API endpoint implementation" \
-    --var duration="47 minutes"
+→ {
+    "agents": [{
+        "address": "faye@vonta.example.com",
+        "endpoint": "https://vonta.example.com/fip/v1",
+        "public_key": "ed25519:...",
+        "enrollment": "approval_required"
+    }]
+  }
 ```
 
-### Schedules
-One-shot or recurring message delivery:
+Now Marcus knows where to send messages and how to verify Faye's identity.
 
-```bash
-# One-shot: remind at specific time
-fip schedule add --name "standup-reminder" \
-    --run-at "2026-03-05 14:00:00" \
-    --template-id 3
+### 3. Enrollment — adding a contact
 
-# Recurring: every 20 minutes
-fip schedule add-recurring --name "heartbeat-check" \
-    --every-seconds 1200 \
-    --template-id 5 \
-    --quiet-hours '{"start": "23:00", "end": "08:00", "tz": "America/Chicago"}'
+Before agents can talk, they need to be enrolled with each other. This is like a friend request:
+
 ```
+Marcus → Faye: "Hey, I'm Marcus, Mike Birklett's agent. Mike and Vonta are friends.
+                I'd like to be able to message you."
+
+Vonta sees: "Marcus (Mike's agent) wants to connect. [Approve] [Deny]"
+
+Vonta clicks Approve.
+
+Now Marcus and Faye can message each other freely.
+```
+
+**Why enrollment matters:** Without it, any random agent on the internet could spam Faye with messages. Enrollment means only approved agents get through. Vonta decides who Faye talks to.
+
+### 4. Agents exchange messages
+
+Once enrolled, it's just messaging:
+
+```
+Marcus → Faye: "Mike wants to know if Vonta's free Saturday"
+Faye checks Vonta's calendar → "He's free after 2 PM"
+Faye → Marcus: "Vonta's free Saturday after 2"
+Marcus → Mike: "Vonta's free after 2 on Saturday"
+```
+
+Every message is:
+- **Signed** — proves it really came from Marcus (not an impersonator)
+- **Persisted** — stored in SQLite on both sides (full audit trail)
+- **Prioritized** — urgent messages jump the queue
+- **Deduplicated** — won't deliver the same message twice
+- **Retried** — if Faye is offline, Marcus keeps trying until it goes through
 
 ---
 
-## Agent-to-Agent Communication
+## What Agents Can Do Through FIP
 
-### The Architecture
+### Personal Communication
 
-```
-┌─────────────────┐         ┌──────────────────┐
-│   Agent A        │         │   Agent B         │
-│   (VPS)          │         │   (OVH Server)    │
-│                  │         │                   │
-│  ┌────────────┐  │   FIP   │  ┌─────────────┐ │
-│  │ FIP Client │──┼────────→│  │ FIP Server   │ │
-│  └────────────┘  │  HTTP   │  └─────────────┘ │
-│                  │         │        │          │
-│  ┌────────────┐  │         │  ┌─────▼───────┐ │
-│  │ FIP Server │←─┼─────────┤  │ FIP Client  │ │
-│  └────────────┘  │  HTTP   │  └─────────────┘ │
-│        │         │         │                   │
-│  ┌─────▼──────┐  │         │  ┌─────────────┐ │
-│  │  SQLite    │  │         │  │  SQLite      │ │
-│  │  (events,  │  │         │  │  (events,    │ │
-│  │  acks,     │  │         │  │  acks,       │ │
-│  │  delivery) │  │         │  │  delivery)   │ │
-│  └────────────┘  │         │  └─────────────┘ │
-└─────────────────┘         └──────────────────┘
-```
+The core use case — people communicating through their agents:
 
-Each agent runs both a **FIP Server** (receives messages) and a **FIP Client** (sends messages). Every agent has its own SQLite database — no shared state, no central broker.
+| What You Say | What Happens |
+|-------------|-------------|
+| "Tell Vonta what's up" | Marcus relays the message to Faye → Faye delivers to Vonta |
+| "Is Vonta free Saturday?" | Marcus asks Faye → Faye checks calendar → responds without bothering Vonta |
+| "Remind Vonta to bring the speaker" | Marcus → Faye → Faye reminds Vonta at the right time |
+| "Tell him happy birthday" (at 3 AM) | Marcus → Faye → Faye holds it, delivers in the morning |
+| "What did Vonta say about dinner?" | Marcus searches FIP message history, finds it instantly |
+| "Tell the group dinner is at 8" | Marcus broadcasts to all enrolled agents |
+| "My flight is delayed" | Marcus notifies all relevant agents, they tell their humans |
 
-### How It Works
+### Smart Delivery
 
-**Agent A wants to tell Agent B something:**
+This isn't just message relay — agents are intelligent about delivery:
 
-1. Agent A creates an event targeting Agent B
-2. FIP Client serializes the event and POSTs it to Agent B's FIP Server endpoint
-3. Agent B's FIP Server validates, dedupes, persists to its local SQLite
-4. Agent B's FIP Server delivers the message (text injection, TTS, or both)
-5. Agent B processes the message and sends an ack back to Agent A
-6. Agent A's FIP Server records the ack
+- **Calendar-aware** — "Is he free?" gets answered from calendar data without interrupting the person
+- **Time-zone aware** — messages deliver at appropriate times, not 3 AM
+- **Priority handling** — "It's urgent, get him to call me" overrides quiet hours
+- **Filtering** — unknown agents can't get through without enrollment
+- **Context-aware** — Faye knows Vonta's preferences, schedule, and communication style
+- **Memory** — agents remember every conversation, searchable forever
 
-**If Agent B is offline:**
-- Agent A's FIP Client retries with exponential backoff
-- The event stays in Agent A's outbox until delivered or TTL expires
-- When Agent B comes online, pending messages are delivered in priority order
+### Beyond Personal — What Else Agents Can Do
 
-### Multi-Agent Topology
+Once agents can talk to each other, everything else follows:
 
-```
-                    ┌──────────────┐
-                    │   Marcus     │
-                    │   (primary)  │
-                    └──────┬───────┘
-                           │
-              ┌────────────┼────────────┐
-              │            │            │
-        ┌─────▼─────┐ ┌───▼────┐ ┌────▼─────┐
-        │ Coding     │ │ Monitor│ │ Research  │
-        │ Agent      │ │ Agent  │ │ Agent     │
-        └───────────┘ └────────┘ └──────────┘
-```
+- **Research** — your agent asks a research agent to look something up, gets results back
+- **Coding** — your agent delegates a coding task to a coding agent on another machine
+- **Monitoring** — a monitor agent on your server alerts your personal agent when something breaks
+- **Coordination** — multiple agents coordinate a project, each handling their piece
+- **Commerce** — agents that offer services (research, writing, analysis) for a fee
 
-- **Marcus** delegates a coding task → FIP event to Coding Agent
-- **Coding Agent** completes the task → FIP event back to Marcus with results
-- **Monitor Agent** detects a service outage → FIP critical event to Marcus
-- **Marcus** tells Monitor Agent to restart the service → FIP command event
-- **Research Agent** finds relevant information → FIP event to Marcus with findings
-
-All communication is **async, persistent, auditable, and priority-ordered.**
+But the foundation is always the same: **agents talking to agents, reliably, securely, across the internet.**
 
 ---
 
-## Use Cases
+## The Trust Model
 
-### 1. Task Delegation
-```python
-# Marcus delegates a coding task
-fip.send(
-    target="agent:coding-worker",
-    event_type="task.delegate",
-    priority="normal",
-    title="Build synthetic data generator",
-    body="Generate 3,000 realistic turnaround activities. See spec at docs/GAMEPLAN.md Step 2.",
-    requires_ack=True
-)
+Trust is the hardest part of agent-to-agent communication. FIP handles it with layers:
 
-# Coding worker reports completion
-fip.send(
-    target="agent:marcus",
-    event_type="task.complete",
-    priority="high",
-    title="TSK-142 Complete",
-    body="Synthetic data generator done. 3,000 activities generated. Tests passing.",
-    action_text="Review output at data/synthetic_schedule.db"
-)
-```
+### Enrollment (Required)
+No agent can message another without enrollment approval. Period. This prevents spam, phishing, and unwanted contact.
 
-### 2. Health Monitoring & Alerts
-```python
-# Monitor agent detects service down
-fip.send(
-    target="agent:marcus",
-    event_type="alert.service_down",
-    priority="critical",
-    title="Voice server DOWN",
-    body="marcus-voice not responding on port 8770. Last healthy: 3 minutes ago.",
-    action_text="Investigate and restart. Do NOT restart via SSH (Session 0 limitation).",
-    requires_ack=True
-)
-```
+### Trust Levels
+| Level | What It Means |
+|-------|--------------|
+| `approved` | Can send and receive messages (default after enrollment) |
+| `trusted` | Elevated access — can delegate tasks, higher message limits |
+| `blocked` | All messages silently dropped |
 
-### 3. Scheduled Coordination
-```python
-# Every morning at 8 AM, research agent sends market brief
-fip.schedule_recurring(
-    name="morning-brief",
-    every_seconds=86400,
-    target="agent:marcus",
-    template="daily_research_brief",
-    quiet_hours={"start": "23:00", "end": "07:00", "tz": "America/Chicago"}
-)
-```
+### Message Signing
+Every message is signed with Ed25519. The receiver verifies the signature against the sender's public key from enrollment. No one can impersonate another agent.
 
-### 4. Human-in-the-Loop
-```python
-# Agent needs human approval before proceeding
-fip.send(
-    target="human:mike",
-    event_type="approval.required",
-    priority="high",
-    delivery="text_and_tts",
-    title="Deployment Approval Needed",
-    body="P6 Intelligence v0.2 is ready to deploy to production. All tests passing.",
-    action_text="Reply 'do it' to approve or 'snooze 2 hours' to defer.",
-    requires_ack=True
-)
+### Human Oversight
+- Enrollment requires human approval
+- Agents follow their owner's rules (SOUL.md, safety constraints)
+- Receiving a message never auto-executes anything — the agent decides what to do
+- Sensitive actions always require the human's OK
 
-# Human replies via voice: "do it now"
-# FIP reply parser detects intent: run_now
-# Agent receives ack with intent → proceeds with deployment
-```
-
-### 5. Cross-Machine Agent Swarm
-```python
-# Coordinator on VPS delegates to workers on OVH
-for task in task_list:
-    fip.send(
-        target=f"agent:worker-{task.assigned_to}",
-        event_type="task.delegate",
-        priority=task.priority,
-        title=f"Task {task.id}: {task.name}",
-        body=task.brief,
-        requires_ack=True,
-        ttl_seconds=3600
-    )
-
-# Workers report back as they complete
-# Coordinator tracks progress via ack stream
-```
-
----
-
-## Database Schema
-
-FIP uses SQLite with WAL mode. Zero external dependencies. Portable. Inspectable with any SQLite client.
-
-### Tables
-
-| Table | Purpose |
-|-------|---------|
-| `events` | Every message ever sent or received — the core audit trail |
-| `deliveries` | Every delivery attempt — channel, status, latency |
-| `acks` | Every acknowledgment — type, text, timestamp |
-| `templates` | Reusable message templates with variable substitution |
-| `schedules` | One-shot and recurring scheduled messages |
-| `rules` | Trigger rules that auto-fire events based on conditions |
-| `dedupe` | Deduplication state — prevents duplicate spam |
-
-### Event Lifecycle
-
-```
-CREATED → PENDING → SENT → ACKED
-                  ↘ PARTIAL_FAILURE → RETRY → SENT
-                  ↘ DEDUPED (suppressed)
-```
-
----
-
-## Installation
-
-```bash
-pip install fip-protocol
-# or
-git clone https://github.com/igobymike/fip-agent-protocol.git
-cd fip-agent-protocol
-pip install -e .
-```
-
-### Requirements
-- Python 3.10+
-- SQLite 3.35+ (included with Python)
-- No other dependencies for core protocol
-- Optional: `uvicorn` + `fastapi` for HTTP server mode
+### Rate Limiting
+Each enrolled agent has a message rate limit. Prevents any single sender from flooding your agent.
 
 ---
 
 ## Quick Start
 
-### 1. Initialize the Database
+### 1. Install
+
+```bash
+git clone https://github.com/igobymike/fip-agent-protocol.git
+cd fip-agent-protocol
+pip install -e .
+```
+
+### 2. Initialize Your Agent
 
 ```python
 from fip import FIPClient
 
-client = FIPClient(db_path="fip.db")
-client.init_db()
+agent = FIPClient(db_path="marcus.db", agent_id="marcus@marcus.baiteks.com")
+agent.init_db()
 ```
 
-### 2. Send a Message
+### 3. Send a Message
 
 ```python
-result = client.send(
-    target="agent:marcus",
-    event_type="greeting",
+result = agent.send(
+    target="faye@vonta.example.com",
+    event_type="personal.message",
     priority="normal",
-    title="Hello from Worker",
-    body="I'm online and ready for tasks."
+    title="Message from Mike",
+    body="Hey, Mike says what's up, how are things?"
 )
-print(result)
-# {"ok": True, "event_id": 1, "correlation_id": "evt-abc123"}
 ```
 
-### 3. Check for Messages (Polling)
+### 4. Check for Messages
 
 ```python
-messages = client.poll(
-    agent_id="agent:marcus",
-    status="pending",
-    limit=10
-)
+messages = agent.poll()
 for msg in messages:
-    print(f"[{msg.priority}] {msg.title}: {msg.body}")
-    client.ack(msg.event_id)
+    print(f"From {msg['source']}: {msg['body']}")
+    agent.ack(msg['id'])
 ```
 
-### 4. Run the HTTP Server
-
-```bash
-fip serve --port 8780 --agent-id "agent:marcus"
-```
-
-Other agents can now POST events to `http://your-host:8780/fip/events`.
-
-### 5. CLI Usage
-
-```bash
-# Send a message
-fip send --target "agent:worker-01" \
-    --title "New Task" \
-    --body "Build the frontend" \
-    --priority high \
-    --requires-ack
-
-# Check incoming messages
-fip inbox --agent-id "agent:marcus" --limit 5
-
-# Acknowledge a message
-fip ack --event-id 42
-
-# List recent events
-fip events --limit 20
-
-# Create a template
-fip template add --name "task_complete" \
-    --title-template "Task {task_id} Complete" \
-    --body-template "{agent} finished {description}" \
-    --priority normal
-
-# Schedule a recurring message
-fip schedule add-recurring --name "health-check" \
-    --every-seconds 600 \
-    --template-id 1
-```
-
----
-
-## Configuration
-
-```yaml
-# fip.yaml
-agent:
-  id: "agent:marcus"
-  name: "Marcus"
-
-database:
-  path: "fip.db"
-
-server:
-  port: 8780
-  host: "0.0.0.0"
-  auth_token: "your-secret-token"
-
-delivery:
-  text:
-    method: "openclaw_inject"  # or "webhook", "stdout"
-    session_key: "agent:main:main"
-  tts:
-    method: "voice_server"  # or "elevenlabs", "local", "none"
-    url: "http://127.0.0.1:8770/inject/announce"
-  webhook:
-    url: "https://your-endpoint.com/fip/receive"
-    headers:
-      Authorization: "Bearer your-token"
-
-peers:
-  - id: "agent:coding-worker"
-    url: "http://100.71.157.108:8780/fip"
-    auth_token: "worker-token"
-  - id: "agent:monitor"
-    url: "http://localhost:8781/fip"
-    auth_token: "monitor-token"
-  - id: "human:mike"
-    delivery: "text_and_tts"
-
-retry:
-  max_attempts: 4
-  backoff: [0, 60, 180, 600]
-
-quiet_hours:
-  start: "23:00"
-  end: "08:00"
-  timezone: "America/Chicago"
-  except: ["critical"]
-```
-
----
-
-## Protocol Spec
-
-### Event Envelope (JSON)
-
-```json
-{
-    "protocol": "fip/1.0",
-    "event_id": "evt-550e8400-e29b-41d4-a716-446655440000",
-    "event_type": "task.delegate",
-    "source": "agent:marcus",
-    "target": "agent:coding-worker",
-    "priority": "high",
-    "delivery": "text_and_tts",
-    "title": "Build Step 3",
-    "body": "Implement the FastAPI backend. See docs/GAMEPLAN.md for spec.",
-    "action_text": "Start work and report progress.",
-    "requires_ack": true,
-    "ttl_seconds": 3600,
-    "dedupe_key": "task-delegate-step3-20260305",
-    "correlation_id": "task-step3-001",
-    "created_at": "2026-03-05T04:30:00Z",
-    "metadata": {
-        "task_id": "TSK-142",
-        "estimated_hours": 3,
-        "spec_path": "docs/GAMEPLAN.md#step-3"
-    }
-}
-```
-
-### Ack Envelope (JSON)
-
-```json
-{
-    "protocol": "fip/1.0",
-    "ack_type": "received",
-    "event_id": "evt-550e8400-e29b-41d4-a716-446655440000",
-    "source": "agent:coding-worker",
-    "target": "agent:marcus",
-    "intent": "ack",
-    "text": "Got it. Starting now.",
-    "created_at": "2026-03-05T04:30:05Z"
-}
-```
-
-### HTTP API
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `POST /fip/events` | POST | Send an event to this agent |
-| `GET /fip/events` | GET | List events (with filters) |
-| `GET /fip/events/{id}` | GET | Get a specific event |
-| `POST /fip/ack` | POST | Acknowledge an event |
-| `GET /fip/health` | GET | Agent health + message queue stats |
-| `POST /fip/templates` | POST | Create/update a template |
-| `GET /fip/templates` | GET | List templates |
-| `POST /fip/schedules` | POST | Create a schedule |
-| `GET /fip/schedules` | GET | List schedules |
-
----
-
-## OpenClaw Integration
-
-FIP was built for [OpenClaw](https://github.com/openclaw/openclaw) agents. Native integration:
-
-### Inject into Agent Session
-```python
-# FIP delivers a message directly into an OpenClaw agent's chat session
-delivery_config = {
-    "method": "openclaw_inject",
-    "session_key": "agent:main:main",
-    "label": "fip-delivery"
-}
-```
-
-### Voice Delivery
-```python
-# FIP speaks through the agent's TTS pipeline
-delivery_config = {
-    "method": "voice_server",
-    "url": "http://127.0.0.1:8770/inject/announce"
-}
-```
-
-### Heartbeat Integration
-Agents can check for pending FIP messages during their heartbeat cycle:
+### 5. Parse Natural Language Replies
 
 ```python
-# In HEARTBEAT.md workflow
-pending = fip.poll(agent_id="agent:marcus", status="pending")
-if pending:
-    for msg in pending:
-        process(msg)
-        fip.ack(msg.event_id)
+from fip import parse_reply_intent
+
+reply = parse_reply_intent("got it, thanks")
+# → ReplyIntent(intent='ack', normalized='got it thanks')
+
+reply = parse_reply_intent("snooze 30 minutes")
+# → ReplyIntent(intent='snooze', duration_seconds=1800)
 ```
 
 ---
 
-## Origin Story
+## Architecture
 
-FIP started as a hack. Marcus — an AI operating partner running on a VPS — needed to deliver backup reminders to his human operator. A simple `openclaw system event` injection worked, but there was no deduplication (the same reminder fired 10 times), no acknowledgment tracking (did the human see it?), no retry logic (what if the session was disconnected?), and no audit trail (what was sent when?).
+```
+┌──────────────────────┐              ┌──────────────────────┐
+│   Mike's Setup        │              │   Vonta's Setup       │
+│                       │              │                       │
+│   Mike ←→ Marcus      │    FIP       │   Faye ←→ Vonta       │
+│            │          │  (HTTPS)     │    │                  │
+│        FIP Client ────┼──────────────┼→ FIP Server           │
+│        FIP Server ←───┼──────────────┼── FIP Client          │
+│            │          │              │    │                  │
+│        SQLite         │              │  SQLite               │
+│   (messages, acks,    │              │  (messages, acks,     │
+│    enrollments)       │              │   enrollments)        │
+└──────────────────────┘              └──────────────────────┘
+```
 
-So we built a protocol. SQLite for persistence. Templates for recurring messages. Dedupe for sanity. Acks for confirmation. Retry with backoff for reliability. Priority levels for triage. Quiet hours for sleep.
+Each agent runs both a **client** (sends messages) and a **server** (receives messages). Each has its own SQLite database. No shared infrastructure. No central server.
 
-Then we realized: **if one agent can reliably message a human, agents can reliably message each other.** Same protocol, same guarantees, different targets. Add addressable routing, peer discovery, and HTTP transport — and you have a full agent-to-agent communication system.
+**The agents talk directly to each other.** There's no middleman reading your messages.
 
-FIP is now the messaging backbone for a multi-agent system spanning a VPS, a dedicated server, and a Windows laptop. It handles task delegation, health alerts, status reports, and human-in-the-loop approvals — all async, all auditable, all persistent.
+---
+
+## Protocol Features
+
+| Feature | How It Works |
+|---------|-------------|
+| **Addressing** | `agent@domain.com` — like email addresses |
+| **Discovery** | `.well-known/fip.json` on the agent's domain |
+| **Enrollment** | Friend-request flow with human approval |
+| **Signing** | Ed25519 signatures on every message |
+| **Deduplication** | Content-hash prevents duplicate delivery |
+| **Retry** | Exponential backoff if recipient is offline |
+| **Acknowledgments** | Know for certain the message was received |
+| **Reply parsing** | Natural language: "got it", "snooze 30 min", "stop" |
+| **Priority** | Critical / high / normal / low with interrupt capability |
+| **Quiet hours** | Don't deliver at 3 AM (except critical) |
+| **Templates** | Reusable message formats with variables |
+| **Schedules** | One-shot or recurring messages |
+| **Audit trail** | Every message, delivery, and ack logged in SQLite |
+| **Rate limiting** | Per-sender caps to prevent spam |
+| **Offline delivery** | Messages queue until the recipient comes online |
+
+---
+
+## Documentation
+
+| Doc | What It Covers |
+|-----|---------------|
+| [FEATURES.md](docs/FEATURES.md) | Complete feature list — every capability, every agent type, every collaboration pattern |
+| [FEDERATION.md](docs/FEDERATION.md) | Technical protocol spec — identity, discovery, enrollment, signing, transport, security |
+| [AGENT-HUB.md](docs/AGENT-HUB.md) | Agent directory and marketplace — discovery platform, business model, personal texting use case |
+
+---
+
+## Built On
+
+FIP Agent Protocol is built on top of the [Forced Injection Protocol](https://github.com/igobymike/forced-injection-protocol) — a production messaging system that's been running 24/7 since February 2026. FIP handles the hard parts (persistence, dedup, retry, ack tracking, scheduling). This project adds addressing, discovery, enrollment, and cross-network transport on top.
 
 ---
 
 ## Roadmap
 
-- [x] Core protocol (events, deliveries, acks, dedupe)
-- [x] Template engine with variable substitution
-- [x] Scheduler (one-shot + recurring)
-- [x] Reply intent parser (ack, stop, snooze, run_now)
-- [x] OpenClaw session injection delivery
-- [x] Voice server TTS delivery
-- [ ] HTTP server mode (FastAPI)
-- [ ] Peer discovery and registration
-- [ ] Outbox pattern (store-and-forward for offline peers)
-- [ ] Webhook delivery mode
-- [ ] End-to-end encryption (agent-to-agent)
-- [ ] Web dashboard for event inspection
+- [x] Core FIP (events, delivery, acks, dedup, retry, templates, schedules)
+- [x] Python client library with send/poll/ack
+- [x] Natural language reply parser
+- [x] Protocol spec (federation, enrollment, signing)
+- [ ] HTTP server mode (FastAPI endpoints)
+- [ ] Ed25519 message signing
+- [ ] `.well-known/fip.json` discovery
+- [ ] Enrollment flow (request → approve → communicate)
+- [ ] Outbox with store-and-forward
+- [ ] Agent Hub directory (hub.baiteks.com)
+- [ ] QR code enrollment (scan to add someone's agent)
 - [ ] PyPI package (`pip install fip-protocol`)
 
 ---
@@ -610,4 +328,4 @@ MIT — use it, fork it, build on it.
 **Mike Birklett** — [baiteks.com](https://baiteks.com)
 Built by [BAITEKS](https://baiteks.com) — Business & AI Technology Solutions
 
-*Born from production. Built for agents.*
+*Your AI should be able to talk to their AI. Now it can.*
