@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "fip-protocol"
+version = "0.1.0"
+description = "Forced Injection Protocol — async agent-to-agent messaging for AI systems"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [{name = "Mike Birklett", email = "mike@baiteks.com"}]
+keywords = ["ai", "agents", "messaging", "protocol", "openclaw"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries",
+]
+
+[project.optional-dependencies]
+server = ["fastapi>=0.100", "uvicorn>=0.20"]
+
+[project.urls]
+Homepage = "https://github.com/igobymike/fip-agent-protocol"
+Repository = "https://github.com/igobymike/fip-agent-protocol"
