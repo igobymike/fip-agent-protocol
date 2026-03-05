@@ -366,3 +366,82 @@ The protocol is decentralized (agents talk directly to each other). The hub is t
 ---
 
 *Built by [BAITEKS](https://baiteks.com) — Business & AI Technology Solutions*
+
+---
+
+## Appendix: The Personal Use Case — Agent-to-Agent Texting
+
+*This is the use case that sells OpenClaw to normal people.*
+
+### The Pitch
+
+**"My AI talks to your AI."**
+
+Forget enterprise. Forget marketplaces. The killer feature is this: Mike tells Marcus to text Vonta. Marcus sends a message to Faye (Vonta's agent). Faye delivers it. Vonta responds through Faye. Marcus tells Mike. Done.
+
+**It's texting — but your agents are the delivery system.**
+
+### How It Actually Works
+
+```
+Mike: "Tell Vonta what's up, how's things?"
+
+Marcus → Faye: "Hey, message from Mike: what's up, how are things?"
+
+Faye → Vonta: "Mike says what's up, how are things?"
+
+Vonta: "Tell him I'm good, just got back from Dallas"
+
+Faye → Marcus: "Vonta says he's good, just got back from Dallas"
+
+Marcus → Mike: "Vonta's good, just got back from Dallas."
+```
+
+Nobody opened an app. Nobody typed a text. The humans just talked to their agents naturally and the agents handled everything.
+
+### Smart Delivery — Why This Is Better Than Texting
+
+| Scenario | Regular Texting | Agent-to-Agent |
+|----------|----------------|---------------|
+| "Is Vonta free Saturday?" | Text Vonta, wait for reply | Faye checks Vonta's calendar, responds instantly. Vonta never interrupted. |
+| "Tell him happy birthday" at 3 AM | Send it, wake him up | Faye holds it, delivers in the morning. |
+| Random stranger messages Vonta | Gets through, Vonta deals with it | Faye filters: not enrolled → ignored or challenged. |
+| "Remind Vonta to bring the speaker" | You have to remember to text later | Marcus → Faye. Faye reminds Vonta at the right time. |
+| Vonta's flight delayed | He has to text everyone individually | Faye broadcasts to all relevant agents: "Vonta's 2 hours late." |
+| "What did Vonta say about dinner last week?" | Scroll through texts | Marcus searches his FIP message history, finds it instantly. |
+
+### The Rules
+
+1. **Faye works for Vonta. Marcus works for Mike.** Neither agent takes commands from the other person.
+2. **Messages are relayed, not commanded.** You're talking TO Vonta THROUGH the agents, not commanding Faye.
+3. **Each agent applies their owner's rules.** Faye decides when/how to deliver based on Vonta's preferences, quiet hours, calendar, etc.
+4. **Enrollment = adding a contact.** Vonta approves Marcus once. After that, they can talk freely.
+5. **History on both sides.** Marcus logs the conversation. Faye logs the conversation. Both owners can review.
+
+### What Makes People Want This
+
+- **Zero friction.** Talk to your agent naturally. No app switching, no typing.
+- **Smart timing.** Agents know when to deliver and when to hold.
+- **Context-aware.** "Is he free?" gets answered from calendar data, not by bothering the person.
+- **Filtered.** Agents protect their humans from unwanted messages.
+- **Async by nature.** No read receipts, no "typing..." — messages arrive when they should.
+- **Memory.** "What did Vonta say about the trip?" — your agent remembers everything.
+
+### The Social Network Effect
+
+- Mike sets up Marcus. Tells Vonta about it.
+- Vonta sets up Faye. Now Marcus and Faye can talk.
+- Vonta tells his friend Devon. Devon sets up his agent.
+- Now Devon's agent can talk to Faye and Marcus.
+- Each new person makes the network more useful for everyone.
+
+**This is how messaging apps grow.** One person invites another. The network compounds.
+
+### The Hub for Personal Use
+
+The hub (`hub.baiteks.com`) in this context becomes:
+- **Add contacts** — search for your friends' agents by name or phone number
+- **QR code enrollment** — scan a QR code to enroll with someone's agent (like adding on WhatsApp)
+- **Contact sync** — "Find friends who have agents" (like how Telegram finds your contacts)
+- **Agent profiles** — see who the person is, what their agent can do
+- **Privacy controls** — who can find you, who can enroll, who gets auto-approved
